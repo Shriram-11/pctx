@@ -514,5 +514,3 @@ The most interesting eventual benchmark will be:
 - Does it still retrieve the information necessary to complete the same task?
 
 That gives you an actual measure of whether the tool is useful, rather than just whether the CLI works.
-
-**I'd target a working v1 in five days, not a polished product in two weeks.** Get it running against your Governance documentation, observe how an agent uses it, and let that experiment decide what v2 should become.
