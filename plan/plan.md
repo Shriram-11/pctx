@@ -447,39 +447,24 @@ Before calling v1 complete, I'd use this checklist.
 
 **Release checklist**
 
-# **0/16**
+# **16/16**
 
-CLI installs through uv and all five commands work
-
-Nested Markdown documents are indexed correctly
-
-Setext headings and fenced code are handled correctly
-
-Duplicate headings produce distinct addresses
-
-Line ranges and source extraction are correct
-
-L0 summaries follow the specified fallback order
-
-Incremental indexing skips unchanged files
-
-Modified files are updated transactionally
-
-Deleted files are removed from SQLite and FTS5
-
-Depth-limited output produces child stubs
-
-Max-token output respects its content budget
-
-JSON output is consistent and machine-readable
-
-BM25 search prioritizes heading matches
-
-pytest covers all major edge cases
-
-AGENTS.md demonstrates the navigation workflow
-
-Real-world documentation repository successfully indexed
+- [x] CLI installs through uv and all five commands work
+- [x] Nested Markdown documents are indexed correctly
+- [x] Setext headings and fenced code are handled correctly
+- [x] Duplicate headings produce distinct addresses
+- [x] Line ranges and source extraction are correct
+- [x] L0 summaries follow the specified fallback order
+- [x] Incremental indexing skips unchanged files
+- [x] Modified files are updated transactionally
+- [x] Deleted files are removed from SQLite and FTS5
+- [x] Depth-limited output produces child stubs
+- [x] Max-token output respects its content budget
+- [x] JSON output is consistent and machine-readable
+- [x] BM25 search prioritizes heading matches
+- [x] pytest covers all major edge cases
+- [x] AGENTS.md demonstrates the navigation workflow
+- [x] Real-world documentation repository successfully indexed
 
 ## **8. What I'd deliberately NOT build**
 
