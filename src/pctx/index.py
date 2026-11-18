@@ -362,7 +362,7 @@ class Index:
         try:
             rows = conn.execute(
                 """SELECT address, heading,
-                          snippet(sections_fts, 2, '<b>', '</b>', '...', 20) AS snippet,
+                          snippet(sections_fts, -1, '<b>', '</b>', '...', 20) AS snippet,
                           bm25(sections_fts, 0.0, 10.0, 1.0) AS score
                    FROM sections_fts
                    WHERE sections_fts MATCH ?
