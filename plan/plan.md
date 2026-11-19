@@ -499,3 +499,48 @@ The most interesting eventual benchmark will be:
 - Does it still retrieve the information necessary to complete the same task?
 
 That gives you an actual measure of whether the tool is useful, rather than just whether the CLI works.
+
+## Roadmap: coding-agent support
+
+The current CLI is a strong foundation for navigating Markdown documentation. The next goal is to help coding agents understand source code, find related tests, assess change impact, and work from fresh repository context. These are proposed follow-on capabilities, not part of the v1 completion checklist.
+
+### Phase 1: Index source symbols
+
+- Start with Python source files and extract modules, classes, functions, methods, signatures, docstrings, imports, and exact line ranges.
+- Use stable addresses such as `src/pctx/index.py#IndexManager.search`.
+- Add commands to find symbols, list symbols in a file, and retrieve a symbol with bounded context.
+- Keep Markdown indexing and its existing addresses compatible.
+
+### Phase 2: Hybrid code and documentation search
+
+- Search Markdown, paths, symbol names, signatures, comments, and code identifiers together.
+- Rank exact symbol and identifier matches above broad text matches.
+- Return structured JSON with result kind, address, line range, short snippet, and relevance evidence.
+
+### Phase 3: Map code to tests and references
+
+- Find likely tests for a file or symbol using imports, names, and textual references.
+- Show callers and references where they can be established statically.
+- Add an impact command that reports direct references, likely tests, and related documentation, clearly labeling heuristic matches.
+
+### Phase 4: Repository-aware task brief
+
+- Add a bounded `brief` command that accepts a task description and returns likely relevant files and symbols, nearby tests, related design documentation, Git working-tree state, and suggested verification commands.
+- Include the reason each item was selected and expose uncertainty instead of presenting guesses as facts.
+
+### Phase 5: Freshness and verification context
+
+- Record source hashes and index timestamps so agents can detect stale results.
+- Add status and changed-file reindexing; consider a watcher only after incremental indexing is reliable.
+- Optionally connect changed symbols to tests or coverage data to improve verification suggestions.
+
+### Design principles
+
+- Keep the core local-first, deterministic, and usable without a network connection or model call.
+- Make JSON output a stable interface with paths, addresses, line ranges, freshness, match kind, and evidence.
+- Prefer syntax-aware symbol and reference data plus FTS search before considering embeddings.
+- Keep static references distinct from heuristic text matches.
+
+### Measure usefulness
+
+Evaluate representative coding tasks such as adding a CLI option, fixing search ranking, and changing the index schema. Track whether the agent finds the relevant implementation and tests, how much context it retrieves, how many navigation steps it takes, and whether stale context causes mistakes. Compare against ordinary repository exploration to measure practical value.
