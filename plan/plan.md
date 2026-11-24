@@ -500,47 +500,69 @@ The most interesting eventual benchmark will be:
 
 That gives you an actual measure of whether the tool is useful, rather than just whether the CLI works.
 
-## Roadmap: coding-agent support
+## Roadmap: post-v1
 
-The current CLI is a strong foundation for navigating Markdown documentation. The next goal is to help coding agents understand source code, find related tests, assess change impact, and work from fresh repository context. These are proposed follow-on capabilities, not part of the v1 completion checklist.
+The current CLI is a solid Markdown documentation navigator. The roadmap below focuses on making **that core stronger** — better search, more document formats, MCP integration, and richer agent ergonomics — rather than expanding into general code-intelligence territory that is better served by LSP servers, ctags, and existing IDE tooling.
 
-### Phase 1: Index source symbols
+> **Why the previous roadmap was replaced:** The earlier phases (source-symbol indexing, hybrid code search, test-mapping, task-brief generation) would have turned pctx into a general-purpose code-intelligence tool. That duplicates what LSP, ripgrep, and language-specific analysers already do well, adds massive scope and maintenance burden, and drifts from pctx's core value proposition: fast, token-aware navigation of **documentation**.
 
-- Start with Python source files and extract modules, classes, functions, methods, signatures, docstrings, imports, and exact line ranges.
-- Use stable addresses such as `src/pctx/index.py#IndexManager.search`.
-- Add commands to find symbols, list symbols in a file, and retrieve a symbol with bounded context.
-- Keep Markdown indexing and its existing addresses compatible.
+### Phase 1: Multi-format document support
 
-### Phase 2: Hybrid code and documentation search
+Extend indexing beyond Markdown to cover common documentation formats that agents encounter in real repositories.
 
-- Search Markdown, paths, symbol names, signatures, comments, and code identifiers together.
-- Rank exact symbol and identifier matches above broad text matches.
-- Return structured JSON with result kind, address, line range, short snippet, and relevance evidence.
+- **reStructuredText (.rst):** Parse directive/section hierarchy using docutils or a lightweight custom parser.
+- **Plain text (.txt):** Index with paragraph-based sectioning and synthetic addresses.
+- **AsciiDoc (.adoc):** Parse section hierarchy; AsciiDoc is common in Java and infrastructure projects.
+- Configurable file-type inclusion via `.pctx/config.toml` or CLI flags.
+- All formats produce the same Section model and work with existing `show`, `outline`, `search` commands.
 
-### Phase 3: Map code to tests and references
+### Phase 2: MCP server
 
-- Find likely tests for a file or symbol using imports, names, and textual references.
-- Show callers and references where they can be established statically.
-- Add an impact command that reports direct references, likely tests, and related documentation, clearly labeling heuristic matches.
+Ship pctx as an MCP (Model Context Protocol) server so agents can call it without spawning CLI subprocesses.
 
-### Phase 4: Repository-aware task brief
+- Expose `index`, `ls`, `outline`, `show`, and `search` as MCP tools.
+- Stateful server process keeps the SQLite connection open — no per-call discovery overhead.
+- Publish as an installable MCP server entry (compatible with Antigravity, Claude Desktop, Cursor, etc.).
+- Keep the CLI fully functional; the MCP server wraps the same library code.
 
-- Add a bounded `brief` command that accepts a task description and returns likely relevant files and symbols, nearby tests, related design documentation, Git working-tree state, and suggested verification commands.
-- Include the reason each item was selected and expose uncertainty instead of presenting guesses as facts.
+### Phase 3: Smarter search and cross-references
 
-### Phase 5: Freshness and verification context
+Improve discoverability within the existing document corpus.
 
-- Record source hashes and index timestamps so agents can detect stale results.
-- Add status and changed-file reindexing; consider a watcher only after incremental indexing is reliable.
-- Optionally connect changed symbols to tests or coverage data to improve verification suggestions.
+- **Fuzzy / typo-tolerant search:** FTS5 trigram index or similar to handle misspellings and partial matches.
+- **Cross-document link graph:** Parse `[text](other-doc.md#section)` links and build a reference graph. Add a `refs` command: "what links to this section?" and "what does this section link to?".
+- **Tag / category support:** Extract tags from YAML front matter and allow filtering (`pctx search --tag api`).
+- **Search result pagination:** `--offset` / `--limit` for large result sets.
+
+### Phase 4: Index freshness and watch mode
+
+Help agents trust that results are current.
+
+- **Staleness detection:** Record index timestamps; `pctx status` reports which files have changed on disk since last indexing.
+- **Quick re-index:** `pctx index --changed` re-indexes only files whose on-disk hash differs (already partially supported; make it a first-class flag).
+- **Watch mode:** `pctx watch <root>` uses filesystem events to re-index on save. Ship as opt-in; keep the core usable without it.
+- **Index metadata:** `pctx info` shows index stats — document count, total tokens, last indexed time, index file size.
+
+### Phase 5: Agent ergonomics and context assembly
+
+Make the CLI more useful in multi-step agent workflows without trying to become a code-intelligence tool.
+
+- **Context assembly:** `pctx context <addr1> <addr2> ...` concatenates multiple sections into a single token-budgeted output, deduplicating overlapping ranges. Agents can request exactly the documentation context they need in one call.
+- **Diff-aware show:** `pctx show <addr> --since <git-ref>` highlights what changed in a section since a commit. Useful for agents reviewing documentation updates.
+- **Export:** `pctx export <doc> --format html|pdf` for human-readable output of indexed documents.
+- **Configurable token estimator:** Allow pluggable token estimation (e.g. tiktoken for OpenAI-accurate counts) via an optional dependency.
 
 ### Design principles
 
 - Keep the core local-first, deterministic, and usable without a network connection or model call.
-- Make JSON output a stable interface with paths, addresses, line ranges, freshness, match kind, and evidence.
-- Prefer syntax-aware symbol and reference data plus FTS search before considering embeddings.
-- Keep static references distinct from heuristic text matches.
+- Make JSON output a stable interface with paths, addresses, line ranges, freshness, and evidence.
+- Every new format produces the same Section/Document model — no special-cased output shapes.
+- Prefer shipping small, composable commands over monolithic "do-everything" features.
 
 ### Measure usefulness
 
-Evaluate representative coding tasks such as adding a CLI option, fixing search ranking, and changing the index schema. Track whether the agent finds the relevant implementation and tests, how much context it retrieves, how many navigation steps it takes, and whether stale context causes mistakes. Compare against ordinary repository exploration to measure practical value.
+Track practical metrics on real documentation repositories:
+- Token savings: how many tokens does an agent consume navigating docs with pctx vs. reading raw files?
+- Retrieval accuracy: does the agent find the right section on the first try?
+- Latency: index and query times on repos with 100+ documents.
+- Format coverage: what fraction of a typical repo's docs can pctx index?
