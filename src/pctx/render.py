@@ -320,6 +320,19 @@ def render_search_text(results: list[dict]) -> str:
     return "\n".join(lines).rstrip()
 
 
-def render_search_json(results: list[dict]) -> str:
+def render_search_json(
+    results: list[dict],
+    total_hits: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> str:
     """Render search results as JSON."""
+    if total_hits is not None and offset is not None:
+        return json.dumps(
+            {
+                "results": results,
+                "total_hits": total_hits,
+                "offset": offset,
+            },
+            indent=2,
+        )
     return json.dumps(results, indent=2)

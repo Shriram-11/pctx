@@ -114,15 +114,23 @@ def cmd_search(args: argparse.Namespace) -> None:
     idx = _get_index()
     try:
         highlight = ("<b>", "</b>") if args.json else ("**", "**")
-        results = idx.search(
+        limit = args.limit if args.limit is not None else 20
+        offset = args.offset if args.offset is not None else 0
+        results, total_hits = idx.search_paginated(
             args.query,
+            limit=limit,
+            offset=offset,
             highlight=highlight,
             doc_scope=args.in_path,
             prefix=args.prefix,
             dedup=not args.no_dedup,
         )
         if args.json:
-            print(render_search_json(results))
+            paginated = args.offset is not None or args.limit is not None
+            if paginated:
+                print(render_search_json(results, total_hits=total_hits, offset=offset))
+            else:
+                print(render_search_json(results))
         else:
             print(render_search_text(results))
     finally:
@@ -168,6 +176,8 @@ def main() -> None:
     p_search.add_argument("--in", dest="in_path", default=None, help="Scope search to a document or directory prefix")
     p_search.add_argument("--prefix", action="store_true", help="Enable prefix matching on query terms")
     p_search.add_argument("--no-dedup", action="store_true", help="Disable parent/child result deduplication")
+    p_search.add_argument("--limit", type=int, default=None, help="Maximum results to return (default: 20)")
+    p_search.add_argument("--offset", type=int, default=None, help="Number of results to skip (default: 0)")
     p_search.add_argument("--json", action="store_true", help="Output JSON")
     p_search.set_defaults(func=cmd_search)
 

@@ -99,7 +99,9 @@ def _extract_summary(sections: list[Section], raw_content: str, doc_path: str) -
 
 
 def _dedup_search_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
-    """Suppress parent sections when a matching descendant has an equal or better score."""
+    """Suppress parent sections when a matching descendant has an equal or better score,
+    or when an L0 document root spans the exact same lines as a matching child section.
+    """
     kept: list[sqlite3.Row] = []
     for i, row in enumerate(rows):
         suppressed = False
@@ -111,10 +113,15 @@ def _dedup_search_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
                 and other["level"] > row["level"]
                 and row["start_line"] <= other["start_line"]
                 and other["end_line"] <= row["end_line"]
-                and other["score"] <= row["score"]
             ):
-                suppressed = True
-                break
+                same_span_root = (
+                    row["level"] == 0
+                    and row["start_line"] == other["start_line"]
+                    and row["end_line"] == other["end_line"]
+                )
+                if same_span_root or other["score"] <= row["score"]:
+                    suppressed = True
+                    break
         if not suppressed:
             kept.append(row)
     return kept
@@ -359,21 +366,19 @@ class Index:
         ).fetchall()
         return [_row_to_section(r) for r in rows]
 
-    def search(
+    def _execute_search(
         self,
         query: str,
         limit: int = 20,
+        offset: int = 0,
         highlight: tuple[str, str] = ("<b>", "</b>"),
         doc_scope: Optional[str] = None,
         prefix: bool = False,
         dedup: bool = True,
-    ) -> list[dict]:
-        """Full-text search over indexed sections using BM25 ranking.
-
-        Headings are weighted 10x higher than body content.
-        """
+    ) -> tuple[list[dict], int]:
+        """Execute search and return (page_results, total_hits_capped)."""
         if not query or not query.strip():
-            return []
+            return [], 0
 
         conn = self._get_conn()
 
@@ -385,7 +390,7 @@ class Index:
                 clean_terms.append(f'"{clean_term}"*' if prefix else f'"{clean_term}"')
 
         if not clean_terms:
-            return []
+            return [], 0
 
         fts_query = " AND ".join(clean_terms)
         hl_start, hl_end = highlight
@@ -407,7 +412,7 @@ class Index:
                 where_clauses.append("(d.path = ? OR d.path LIKE ? ESCAPE '\\')")
                 params.extend([scope, f"{escaped}/%"])
 
-        fetch_limit = max(limit * 3, 100) if dedup else limit
+        fetch_limit = max((offset + limit) * 3, 100) if dedup else max(offset + limit, 100)
         params.append(fetch_limit)
         where_sql = " AND ".join(where_clauses)
 
@@ -425,14 +430,16 @@ class Index:
                 tuple(params),
             ).fetchall()
         except sqlite3.OperationalError:
-            return []
+            return [], 0
 
         if dedup:
             rows = _dedup_search_rows(rows)
-        rows = rows[:limit]
+
+        total_hits = min(len(rows), 100)
+        page_rows = rows[offset : offset + limit]
 
         match_kind = "prefix" if prefix else "exact"
-        return [
+        results = [
             {
                 "address": r["address"],
                 "heading": r["heading"],
@@ -440,8 +447,55 @@ class Index:
                 "score": r["score"],
                 "match_kind": match_kind,
             }
-            for r in rows
+            for r in page_rows
         ]
+        return results, total_hits
+
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        highlight: tuple[str, str] = ("<b>", "</b>"),
+        doc_scope: Optional[str] = None,
+        prefix: bool = False,
+        dedup: bool = True,
+    ) -> list[dict]:
+        """Full-text search over indexed sections using BM25 ranking.
+
+        Headings are weighted 10x higher than body content.
+        """
+        results, _ = self._execute_search(
+            query,
+            limit=limit,
+            offset=offset,
+            highlight=highlight,
+            doc_scope=doc_scope,
+            prefix=prefix,
+            dedup=dedup,
+        )
+        return results
+
+    def search_paginated(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        highlight: tuple[str, str] = ("<b>", "</b>"),
+        doc_scope: Optional[str] = None,
+        prefix: bool = False,
+        dedup: bool = True,
+    ) -> tuple[list[dict], int]:
+        """Full-text search returning (results, total_hits)."""
+        return self._execute_search(
+            query,
+            limit=limit,
+            offset=offset,
+            highlight=highlight,
+            doc_scope=doc_scope,
+            prefix=prefix,
+            dedup=dedup,
+        )
 
 
 def _row_to_section(row: sqlite3.Row) -> Section:

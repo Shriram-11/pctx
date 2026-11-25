@@ -280,3 +280,32 @@ def test_search_dedup_suppresses_redundant_parent():
         assert res.returncode == 0
         data = json.loads(res.stdout)
         assert any(r["address"] == "doc.md#guide" for r in data)
+
+
+def test_search_pagination():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        for i in range(5):
+            (tmp_path / f"doc{i}.md").write_text(
+                f"# Section {i}\n\nAuthentication token details {i}.\n",
+                encoding="utf-8",
+            )
+
+        with Index.for_root(tmp_path) as idx:
+            idx.index_directory(tmp_path)
+
+            page1, total1 = idx.search_paginated("Authentication", limit=2, offset=0)
+            page2, total2 = idx.search_paginated("Authentication", limit=2, offset=2)
+            assert len(page1) == 2
+            assert len(page2) == 2
+            assert total1 == 5
+            assert total2 == 5
+            assert page1[0]["address"] != page2[0]["address"]
+
+        # CLI --limit and --offset with --json
+        res = run_cli("search", "Authentication", "--limit", "2", "--offset", "2", "--json", cwd=tmp_path)
+        assert res.returncode == 0
+        payload = json.loads(res.stdout)
+        assert payload["total_hits"] == 5
+        assert payload["offset"] == 2
+        assert len(payload["results"]) == 2
