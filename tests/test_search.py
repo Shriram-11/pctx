@@ -159,3 +159,22 @@ def test_search_cli_text_format(search_env):
     assert res.returncode == 0
     assert "basic.md" in res.stdout
     assert "Prerequisites" in res.stdout
+    assert "**" in res.stdout
+    assert "<b>" not in res.stdout
+    assert "</b>" not in res.stdout
+
+
+def test_search_cli_json_keeps_html_markers(search_env):
+    res = run_cli("search", "Prerequisites", "--json", cwd=search_env)
+    assert res.returncode == 0
+    data = json.loads(res.stdout)
+    assert len(data) > 0
+    assert "<b>" in data[0]["snippet"]
+    assert "</b>" in data[0]["snippet"]
+
+
+def test_search_body_match_includes_heading(search_env):
+    res = run_cli("search", "Python", cwd=search_env)
+    assert res.returncode == 0
+    # "Python 3.10+" is in the body of Prerequisites
+    assert "Prerequisites" in res.stdout

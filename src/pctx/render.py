@@ -313,7 +313,8 @@ def render_search_text(results: list[dict]) -> str:
         heading_part = f"  {r['heading']}" if r.get("heading") else ""
         lines.append(f"{r['address']}{heading_part}")
         if r.get("snippet"):
-            lines.append(f"  {r['snippet']}")
+            snippet = r["snippet"].replace("<b>", "**").replace("</b>", "**")
+            lines.append(f"  {snippet}")
         lines.append("")
 
     return "\n".join(lines).rstrip()

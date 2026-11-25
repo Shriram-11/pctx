@@ -337,7 +337,12 @@ class Index:
         ).fetchall()
         return [_row_to_section(r) for r in rows]
 
-    def search(self, query: str, limit: int = 20) -> list[dict]:
+    def search(
+        self,
+        query: str,
+        limit: int = 20,
+        highlight: tuple[str, str] = ("<b>", "</b>"),
+    ) -> list[dict]:
         """Full-text search over indexed sections using BM25 ranking.
 
         Headings are weighted 10x higher than body content.
@@ -358,17 +363,18 @@ class Index:
             return []
 
         fts_query = " AND ".join(clean_terms)
+        hl_start, hl_end = highlight
 
         try:
             rows = conn.execute(
                 """SELECT address, heading,
-                          snippet(sections_fts, -1, '<b>', '</b>', '...', 20) AS snippet,
+                          snippet(sections_fts, -1, ?, ?, '...', 30) AS snippet,
                           bm25(sections_fts, 0.0, 10.0, 1.0) AS score
                    FROM sections_fts
                    WHERE sections_fts MATCH ?
                    ORDER BY score
                    LIMIT ?""",
-                (fts_query, limit),
+                (hl_start, hl_end, fts_query, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             return []

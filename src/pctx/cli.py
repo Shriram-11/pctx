@@ -113,7 +113,8 @@ def cmd_show(args: argparse.Namespace) -> None:
 def cmd_search(args: argparse.Namespace) -> None:
     idx = _get_index()
     try:
-        results = idx.search(args.query)
+        highlight = ("<b>", "</b>") if args.json else ("**", "**")
+        results = idx.search(args.query, highlight=highlight)
         if args.json:
             print(render_search_json(results))
         else:
