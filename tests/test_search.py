@@ -178,3 +178,39 @@ def test_search_body_match_includes_heading(search_env):
     assert res.returncode == 0
     # "Python 3.10+" is in the body of Prerequisites
     assert "Prerequisites" in res.stdout
+
+
+def test_search_in_document_and_directory():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs" / "api.md").write_text("# API\n\nRate limiting rules.\n", encoding="utf-8")
+        (tmp_path / "docs" / "guide.md").write_text("# Guide\n\nRate limiting examples.\n", encoding="utf-8")
+        (tmp_path / "other.md").write_text("# Other\n\nRate limiting notes.\n", encoding="utf-8")
+
+        idx = Index.for_root(tmp_path)
+        idx.index_directory(tmp_path)
+
+        # Single file scope
+        api_only = idx.search("rate", doc_scope="docs/api.md")
+        assert len(api_only) > 0
+        assert all(r["address"].startswith("docs/api.md") for r in api_only)
+
+        # Directory scope with trailing slash
+        docs_dir = idx.search("rate", doc_scope="docs/")
+        assert len(docs_dir) >= 2
+        assert all(r["address"].startswith("docs/") for r in docs_dir)
+        assert not any(r["address"].startswith("other.md") for r in docs_dir)
+
+        # Directory scope without trailing slash
+        docs_no_slash = idx.search("rate", doc_scope="docs")
+        assert len(docs_no_slash) >= 2
+        assert all(r["address"].startswith("docs/") for r in docs_no_slash)
+        idx.close()
+
+        # CLI --in flag
+        res = run_cli("search", "rate", "--in", "docs/api.md", "--json", cwd=tmp_path)
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert len(data) > 0
+        assert all(item["address"].startswith("docs/api.md") for item in data)

@@ -342,6 +342,7 @@ class Index:
         query: str,
         limit: int = 20,
         highlight: tuple[str, str] = ("<b>", "</b>"),
+        doc_scope: Optional[str] = None,
     ) -> list[dict]:
         """Full-text search over indexed sections using BM25 ranking.
 
@@ -365,16 +366,40 @@ class Index:
         fts_query = " AND ".join(clean_terms)
         hl_start, hl_end = highlight
 
+        where_clauses = ["sections_fts MATCH ?"]
+        params: list[object] = [hl_start, hl_end, fts_query]
+        join_sql = ""
+
+        if doc_scope:
+            scope = doc_scope.replace("\\", "/")
+            if scope.startswith("./"):
+                scope = scope[2:]
+            escaped = scope.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            join_sql = (
+                "JOIN sections s ON s.id = sections_fts.rowid "
+                "JOIN documents d ON d.id = s.doc_id"
+            )
+            if scope.endswith("/"):
+                where_clauses.append("d.path LIKE ? ESCAPE '\\'")
+                params.append(f"{escaped}%")
+            else:
+                where_clauses.append("(d.path = ? OR d.path LIKE ? ESCAPE '\\')")
+                params.extend([scope, f"{escaped}/%"])
+
+        params.append(limit)
+        where_sql = " AND ".join(where_clauses)
+
         try:
             rows = conn.execute(
-                """SELECT address, heading,
-                          snippet(sections_fts, -1, ?, ?, '...', 30) AS snippet,
-                          bm25(sections_fts, 0.0, 10.0, 1.0) AS score
-                   FROM sections_fts
-                   WHERE sections_fts MATCH ?
-                   ORDER BY score
-                   LIMIT ?""",
-                (hl_start, hl_end, fts_query, limit),
+                f"""SELECT sections_fts.address, sections_fts.heading,
+                           snippet(sections_fts, -1, ?, ?, '...', 30) AS snippet,
+                           bm25(sections_fts, 0.0, 10.0, 1.0) AS score
+                    FROM sections_fts
+                    {join_sql}
+                    WHERE {where_sql}
+                    ORDER BY score
+                    LIMIT ?""",
+                tuple(params),
             ).fetchall()
         except sqlite3.OperationalError:
             return []
