@@ -98,6 +98,28 @@ def _extract_summary(sections: list[Section], raw_content: str, doc_path: str) -
     return doc_path
 
 
+def _dedup_search_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
+    """Suppress parent sections when a matching descendant has an equal or better score."""
+    kept: list[sqlite3.Row] = []
+    for i, row in enumerate(rows):
+        suppressed = False
+        for j, other in enumerate(rows):
+            if i == j:
+                continue
+            if (
+                other["doc_id"] == row["doc_id"]
+                and other["level"] > row["level"]
+                and row["start_line"] <= other["start_line"]
+                and other["end_line"] <= row["end_line"]
+                and other["score"] <= row["score"]
+            ):
+                suppressed = True
+                break
+        if not suppressed:
+            kept.append(row)
+    return kept
+
+
 class Index:
     """Manages SQLite index database at .pctx/index.sqlite."""
 
@@ -344,6 +366,7 @@ class Index:
         highlight: tuple[str, str] = ("<b>", "</b>"),
         doc_scope: Optional[str] = None,
         prefix: bool = False,
+        dedup: bool = True,
     ) -> list[dict]:
         """Full-text search over indexed sections using BM25 ranking.
 
@@ -369,17 +392,14 @@ class Index:
 
         where_clauses = ["sections_fts MATCH ?"]
         params: list[object] = [hl_start, hl_end, fts_query]
-        join_sql = ""
+        join_sql = "JOIN sections s ON s.id = sections_fts.rowid"
 
         if doc_scope:
             scope = doc_scope.replace("\\", "/")
             if scope.startswith("./"):
                 scope = scope[2:]
             escaped = scope.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            join_sql = (
-                "JOIN sections s ON s.id = sections_fts.rowid "
-                "JOIN documents d ON d.id = s.doc_id"
-            )
+            join_sql += " JOIN documents d ON d.id = s.doc_id"
             if scope.endswith("/"):
                 where_clauses.append("d.path LIKE ? ESCAPE '\\'")
                 params.append(f"{escaped}%")
@@ -387,14 +407,16 @@ class Index:
                 where_clauses.append("(d.path = ? OR d.path LIKE ? ESCAPE '\\')")
                 params.extend([scope, f"{escaped}/%"])
 
-        params.append(limit)
+        fetch_limit = max(limit * 3, 100) if dedup else limit
+        params.append(fetch_limit)
         where_sql = " AND ".join(where_clauses)
 
         try:
             rows = conn.execute(
                 f"""SELECT sections_fts.address, sections_fts.heading,
                            snippet(sections_fts, -1, ?, ?, '...', 30) AS snippet,
-                           bm25(sections_fts, 0.0, 10.0, 1.0) AS score
+                           bm25(sections_fts, 0.0, 10.0, 1.0) AS score,
+                           s.doc_id, s.start_line, s.end_line, s.level
                     FROM sections_fts
                     {join_sql}
                     WHERE {where_sql}
@@ -404,6 +426,10 @@ class Index:
             ).fetchall()
         except sqlite3.OperationalError:
             return []
+
+        if dedup:
+            rows = _dedup_search_rows(rows)
+        rows = rows[:limit]
 
         match_kind = "prefix" if prefix else "exact"
         return [

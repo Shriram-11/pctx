@@ -119,6 +119,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             highlight=highlight,
             doc_scope=args.in_path,
             prefix=args.prefix,
+            dedup=not args.no_dedup,
         )
         if args.json:
             print(render_search_json(results))
@@ -166,6 +167,7 @@ def main() -> None:
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--in", dest="in_path", default=None, help="Scope search to a document or directory prefix")
     p_search.add_argument("--prefix", action="store_true", help="Enable prefix matching on query terms")
+    p_search.add_argument("--no-dedup", action="store_true", help="Disable parent/child result deduplication")
     p_search.add_argument("--json", action="store_true", help="Output JSON")
     p_search.set_defaults(func=cmd_search)
 

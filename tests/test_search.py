@@ -247,3 +247,36 @@ def test_search_prefix_matching():
         data = json.loads(res.stdout)
         assert len(data) > 0
         assert data[0]["match_kind"] == "prefix"
+
+
+def test_search_dedup_suppresses_redundant_parent():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "doc.md").write_text(
+            "# Guide\n\nGeneral introduction.\n\n## Rate Limiting\n\nConfigure rate limiting quotas.\n",
+            encoding="utf-8",
+        )
+
+        idx = Index.for_root(tmp_path)
+        idx.index_directory(tmp_path)
+
+        # With dedup=True (default), child "Rate Limiting" has heading match (higher score)
+        # so parent "# Guide" and L0 "doc.md" are suppressed.
+        deduped = idx.search("limiting")
+        addrs = [r["address"] for r in deduped]
+        assert "doc.md#guide/rate-limiting" in addrs
+        assert "doc.md#guide" not in addrs
+        assert "doc.md" not in addrs
+
+        # With dedup=False, parent sections are included
+        raw = idx.search("limiting", dedup=False)
+        raw_addrs = [r["address"] for r in raw]
+        assert "doc.md#guide/rate-limiting" in raw_addrs
+        assert "doc.md#guide" in raw_addrs
+        idx.close()
+
+        # CLI --no-dedup
+        res = run_cli("search", "limiting", "--no-dedup", "--json", cwd=tmp_path)
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert any(r["address"] == "doc.md#guide" for r in data)
