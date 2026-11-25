@@ -17,6 +17,8 @@ from pctx.render import (
     render_search_text,
     render_show_json,
     render_show_text,
+    render_similar_json,
+    render_similar_text,
 )
 
 
@@ -138,6 +140,23 @@ def cmd_search(args: argparse.Namespace) -> None:
         idx.close()
 
 
+def cmd_similar(args: argparse.Namespace) -> None:
+    idx = _get_index()
+    try:
+        address = args.address.replace("\\", "/")
+        if idx.get_section(address) is None:
+            print(f"Error: Section '{address}' not found in index.", file=sys.stderr)
+            sys.exit(1)
+
+        results = idx.similar(address, top=args.top)
+        if args.json:
+            print(render_similar_json(results))
+        else:
+            print(render_similar_text(results))
+    finally:
+        idx.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="pctx",
@@ -182,6 +201,13 @@ def main() -> None:
     p_search.add_argument("--offset", type=int, default=None, help="Number of results to skip (default: 0)")
     p_search.add_argument("--json", action="store_true", help="Output JSON")
     p_search.set_defaults(func=cmd_search)
+
+    # similar
+    p_similar = subparsers.add_parser("similar", help="Find sections similar to a given address")
+    p_similar.add_argument("address", help="Section or document address")
+    p_similar.add_argument("--top", type=int, default=5, help="Maximum similar results (default: 5)")
+    p_similar.add_argument("--json", action="store_true", help="Output JSON")
+    p_similar.set_defaults(func=cmd_similar)
 
     args = parser.parse_args()
     args.func(args)

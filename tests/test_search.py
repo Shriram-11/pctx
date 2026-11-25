@@ -354,3 +354,61 @@ def test_search_fuzzy_matching():
         assert len(data) > 0
         assert data[0]["match_kind"] == "fuzzy"
         assert data[0]["matched_term"] == "authentication"
+
+
+def test_similar_sections_and_documents():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        same_text = "# Rate Limiting\n\nConfigure request quotas and throttling limits per client.\n"
+        (tmp_path / "api.md").write_text(
+            same_text + "\n## Quotas\n\nRequest limits and throttling quotas.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "copy.md").write_text(same_text, encoding="utf-8")
+        (tmp_path / "unrelated.md").write_text(
+            "# Banana Bread\n\nBake flour sugar butter eggs in oven.\n",
+            encoding="utf-8",
+        )
+
+        with Index.for_root(tmp_path) as idx:
+            idx.index_directory(tmp_path)
+
+            # Returns at most --top N results and never the source address
+            sims = idx.similar("copy.md#rate-limiting", top=2)
+            assert len(sims) <= 2
+            assert all(r["address"] != "copy.md#rate-limiting" for r in sims)
+            assert all(r["address"] != "copy.md" for r in sims)
+
+            # Identical content scores 1.0 (compare copy.md#rate-limiting vs api.md#rate-limiting if identical,
+            # or add copy2.md with identical content)
+            (tmp_path / "copy2.md").write_text(same_text, encoding="utf-8")
+            idx.index_directory(tmp_path)
+            sims_with_copy = idx.similar("copy.md#rate-limiting", top=5)
+            copy_match = [r for r in sims_with_copy if r["address"] == "copy2.md#rate-limiting"]
+            assert len(copy_match) == 1
+            assert copy_match[0]["score"] == 1.0
+
+            # Unrelated section with zero shared terms is excluded (score 0)
+            all_sims = idx.similar("unrelated.md#banana-bread", top=10)
+            assert all_sims == []
+
+            # Handles L0 document addresses
+            l0_sims = idx.similar("copy.md", top=5)
+            assert len(l0_sims) > 0
+            assert all(not r["address"].startswith("copy.md") for r in l0_sims)
+
+        # CLI --top and --json schema validation
+        res = run_cli("similar", "api.md#rate-limiting", "--top", "2", "--json", cwd=tmp_path)
+        assert res.returncode == 0
+        payload = json.loads(res.stdout)
+        assert isinstance(payload, list)
+        assert len(payload) <= 2
+        for item in payload:
+            assert set(item.keys()) == {"address", "heading", "score", "shared_terms", "estimated_tokens"}
+            assert isinstance(item["shared_terms"], list)
+            assert isinstance(item["estimated_tokens"], int)
+
+        # CLI text output
+        res_text = run_cli("similar", "api.md#rate-limiting", cwd=tmp_path)
+        assert res_text.returncode == 0
+        assert "score:" in res_text.stdout

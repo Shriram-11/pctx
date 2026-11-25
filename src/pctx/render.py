@@ -341,3 +341,24 @@ def render_search_json(
             indent=2,
         )
     return json.dumps(results, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# SIMILAR rendering
+# ---------------------------------------------------------------------------
+
+def render_similar_text(results: list[dict]) -> str:
+    """Render similar section results as text."""
+    if not results:
+        return "No similar sections found."
+
+    lines = []
+    for r in results:
+        heading = r.get("heading") or ""
+        lines.append(f"{r['address']:<36} {heading:<20} score: {r['score']:.2f}")
+    return "\n".join(lines)
+
+
+def render_similar_json(results: list[dict]) -> str:
+    """Render similar section results as JSON."""
+    return json.dumps(results, indent=2)

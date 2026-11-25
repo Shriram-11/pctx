@@ -7,7 +7,10 @@ section hierarchies, and full-text search index (FTS5).
 from __future__ import annotations
 
 import hashlib
+import math
+import re
 import sqlite3
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -141,6 +144,11 @@ def _fuzzy_candidates(conn: sqlite3.Connection, term: str, limit: int = 8) -> li
 
     scored.sort()
     return [cand for _, _, cand in scored[:limit]]
+
+
+def _tokenize_terms(text: str) -> Counter[str]:
+    """Extract lowercase alphanumeric terms (len >= 2) with term frequencies."""
+    return Counter(re.findall(r"[a-z0-9_]{2,}", text.lower()))
 
 
 def _dedup_search_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
@@ -602,6 +610,105 @@ class Index:
             dedup=dedup,
             fuzzy=fuzzy,
         )
+
+    def similar(self, address: str, top: int = 5) -> list[dict]:
+        """Find sections most similar to the given address using TF-IDF cosine similarity."""
+        target = self.get_section(address)
+        if target is None or top <= 0:
+            return []
+
+        tf_target = _tokenize_terms(target.content)
+        if not tf_target:
+            return []
+
+        conn = self._get_conn()
+        total_docs_row = conn.execute("SELECT COUNT(*) AS cnt FROM sections").fetchone()
+        total_docs = total_docs_row["cnt"] if total_docs_row else 1
+
+        def _fetch_df_map(terms: list[str]) -> dict[str, int]:
+            if not terms:
+                return {}
+            placeholders = ",".join("?" for _ in terms)
+            rows = conn.execute(
+                f"SELECT term, doc FROM sections_fts_vocab WHERE term IN ({placeholders})",
+                tuple(terms),
+            ).fetchall()
+            return {r["term"]: r["doc"] for r in rows}
+
+        df_map = _fetch_df_map(list(tf_target.keys()))
+
+        def _tfidf_vec(tf: Counter[str], dfs: dict[str, int]) -> dict[str, float]:
+            vec: dict[str, float] = {}
+            for term, count in tf.items():
+                df = dfs.get(term, 1)
+                idf = math.log((total_docs + 1) / (df + 1)) + 1.0
+                vec[term] = count * idf
+            return vec
+
+        v_target = _tfidf_vec(tf_target, df_map)
+        norm_target = math.sqrt(sum(w * w for w in v_target.values()))
+        if norm_target == 0.0:
+            return []
+
+        top_terms = [t for t, _ in sorted(v_target.items(), key=lambda x: -x[1])[:25]]
+        fts_query = " OR ".join(f'"{t}"' for t in top_terms)
+
+        exclude_sql = "s.address != ?"
+        params: list[object] = [fts_query, target.address]
+        if target.level == 0:
+            exclude_sql += " AND s.doc_id != ?"
+            params.append(target.doc_id)
+        else:
+            exclude_sql += " AND NOT (s.doc_id = ? AND s.level = 0)"
+            params.append(target.doc_id)
+        params.append(max(top * 10, 50))
+
+        try:
+            cand_rows = conn.execute(
+                f"""SELECT s.address, s.heading, s.content, s.estimated_tokens
+                    FROM sections_fts
+                    JOIN sections s ON s.id = sections_fts.rowid
+                    WHERE sections_fts MATCH ? AND {exclude_sql}
+                    LIMIT ?""",
+                tuple(params),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+        scored: list[dict] = []
+        for row in cand_rows:
+            tf_cand = _tokenize_terms(row["content"])
+            if not tf_cand:
+                continue
+            missing_terms = [t for t in tf_cand if t not in df_map]
+            if missing_terms:
+                df_map.update(_fetch_df_map(missing_terms))
+            v_cand = _tfidf_vec(tf_cand, df_map)
+            norm_cand = math.sqrt(sum(w * w for w in v_cand.values()))
+            if norm_cand == 0.0:
+                continue
+
+            overlap = {t: v_target[t] * v_cand[t] for t in v_target if t in v_cand}
+            if not overlap:
+                continue
+            dot = sum(overlap.values())
+            score = min(1.0, round(dot / (norm_target * norm_cand), 4))
+            if score <= 0.0:
+                continue
+
+            shared_terms = [t for t, _ in sorted(overlap.items(), key=lambda x: -x[1])[:8]]
+            scored.append(
+                {
+                    "address": row["address"],
+                    "heading": row["heading"],
+                    "score": score,
+                    "shared_terms": shared_terms,
+                    "estimated_tokens": row["estimated_tokens"],
+                }
+            )
+
+        scored.sort(key=lambda r: (-r["score"], r["address"]))
+        return scored[:top]
 
 
 def _row_to_section(row: sqlite3.Row) -> Section:
