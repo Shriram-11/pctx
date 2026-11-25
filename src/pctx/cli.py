@@ -114,7 +114,12 @@ def cmd_search(args: argparse.Namespace) -> None:
     idx = _get_index()
     try:
         highlight = ("<b>", "</b>") if args.json else ("**", "**")
-        results = idx.search(args.query, highlight=highlight, doc_scope=args.in_path)
+        results = idx.search(
+            args.query,
+            highlight=highlight,
+            doc_scope=args.in_path,
+            prefix=args.prefix,
+        )
         if args.json:
             print(render_search_json(results))
         else:
@@ -160,6 +165,7 @@ def main() -> None:
     p_search = subparsers.add_parser("search", help="Search indexed content")
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--in", dest="in_path", default=None, help="Scope search to a document or directory prefix")
+    p_search.add_argument("--prefix", action="store_true", help="Enable prefix matching on query terms")
     p_search.add_argument("--json", action="store_true", help="Output JSON")
     p_search.set_defaults(func=cmd_search)
 

@@ -343,6 +343,7 @@ class Index:
         limit: int = 20,
         highlight: tuple[str, str] = ("<b>", "</b>"),
         doc_scope: Optional[str] = None,
+        prefix: bool = False,
     ) -> list[dict]:
         """Full-text search over indexed sections using BM25 ranking.
 
@@ -358,7 +359,7 @@ class Index:
         for term in query.strip().split():
             clean_term = "".join(c for c in term if c.isalnum() or c in ("-", "_"))
             if clean_term:
-                clean_terms.append(f'"{clean_term}"')
+                clean_terms.append(f'"{clean_term}"*' if prefix else f'"{clean_term}"')
 
         if not clean_terms:
             return []
@@ -404,12 +405,14 @@ class Index:
         except sqlite3.OperationalError:
             return []
 
+        match_kind = "prefix" if prefix else "exact"
         return [
             {
                 "address": r["address"],
                 "heading": r["heading"],
                 "snippet": r["snippet"],
                 "score": r["score"],
+                "match_kind": match_kind,
             }
             for r in rows
         ]

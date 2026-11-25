@@ -214,3 +214,36 @@ def test_search_in_document_and_directory():
         data = json.loads(res.stdout)
         assert len(data) > 0
         assert all(item["address"].startswith("docs/api.md") for item in data)
+
+
+def test_search_prefix_matching():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "auth.md").write_text(
+            "# Authentication\n\nToken authorization and authenticator setup.\n",
+            encoding="utf-8",
+        )
+
+        idx = Index.for_root(tmp_path)
+        idx.index_directory(tmp_path)
+
+        # Without prefix, "auth" does not match "Authentication"
+        assert idx.search("auth") == []
+
+        # With prefix, "auth" matches
+        results = idx.search("auth", prefix=True)
+        assert len(results) > 0
+        assert results[0]["match_kind"] == "prefix"
+
+        # Exact match still reports match_kind == "exact"
+        exact_results = idx.search("Authentication")
+        assert len(exact_results) > 0
+        assert exact_results[0]["match_kind"] == "exact"
+        idx.close()
+
+        # CLI --prefix
+        res = run_cli("search", "auth", "--prefix", "--json", cwd=tmp_path)
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert len(data) > 0
+        assert data[0]["match_kind"] == "prefix"
