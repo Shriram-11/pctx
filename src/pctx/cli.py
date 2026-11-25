@@ -124,6 +124,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             doc_scope=args.in_path,
             prefix=args.prefix,
             dedup=not args.no_dedup,
+            fuzzy=args.fuzzy,
         )
         if args.json:
             paginated = args.offset is not None or args.limit is not None
@@ -132,7 +133,7 @@ def cmd_search(args: argparse.Namespace) -> None:
             else:
                 print(render_search_json(results))
         else:
-            print(render_search_text(results))
+            print(render_search_text(results, query=args.query))
     finally:
         idx.close()
 
@@ -175,6 +176,7 @@ def main() -> None:
     p_search.add_argument("query", help="Search query")
     p_search.add_argument("--in", dest="in_path", default=None, help="Scope search to a document or directory prefix")
     p_search.add_argument("--prefix", action="store_true", help="Enable prefix matching on query terms")
+    p_search.add_argument("--fuzzy", action="store_true", help="Enable fuzzy matching fallback on typos")
     p_search.add_argument("--no-dedup", action="store_true", help="Disable parent/child result deduplication")
     p_search.add_argument("--limit", type=int, default=None, help="Maximum results to return (default: 20)")
     p_search.add_argument("--offset", type=int, default=None, help="Number of results to skip (default: 0)")

@@ -303,12 +303,17 @@ def render_show_json(
 # SEARCH rendering
 # ---------------------------------------------------------------------------
 
-def render_search_text(results: list[dict]) -> str:
+def render_search_text(results: list[dict], query: Optional[str] = None) -> str:
     """Render search results as text."""
     if not results:
         return "No results found."
 
     lines = []
+    if results[0].get("match_kind") == "fuzzy" and results[0].get("matched_term"):
+        orig = f'"{query}"' if query else "query"
+        lines.append(f'(fuzzy match: {orig} → "{results[0]["matched_term"]}")')
+        lines.append("")
+
     for r in results:
         heading_part = f"  {r['heading']}" if r.get("heading") else ""
         lines.append(f"{r['address']}{heading_part}")

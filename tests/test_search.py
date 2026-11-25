@@ -309,3 +309,48 @@ def test_search_pagination():
         assert payload["total_hits"] == 5
         assert payload["offset"] == 2
         assert len(payload["results"]) == 2
+
+
+def test_search_fuzzy_matching():
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        (tmp_path / "guide.md").write_text(
+            "# Authentication\n\nConfigure token verification.\n\n## Configuration\n\nSettings.\n",
+            encoding="utf-8",
+        )
+
+        with Index.for_root(tmp_path) as idx:
+            idx.index_directory(tmp_path)
+
+            # Exact search still returns exact results unchanged
+            exact = idx.search("Authentication", fuzzy=True)
+            assert len(exact) > 0
+            assert exact[0]["match_kind"] == "exact"
+
+            # Single-character typo in heading-only match ("Authenticaiton" -> "Authentication")
+            typo1 = idx.search("Authenticaiton", fuzzy=True)
+            assert len(typo1) > 0
+            assert typo1[0]["match_kind"] == "fuzzy"
+            assert typo1[0]["matched_term"] == "authentication"
+
+            # Two-character typo for long terms (>= 8 chars): "authentcaton" -> "authentication"
+            typo2 = idx.search("authentcaton", fuzzy=True)
+            assert len(typo2) > 0
+            assert typo2[0]["match_kind"] == "fuzzy"
+            assert typo2[0]["matched_term"] == "authentication"
+
+            # Completely wrong query returns empty even with fuzzy
+            assert idx.search("zzzzzzzzzz", fuzzy=True) == []
+
+        # CLI --fuzzy text & JSON
+        res_text = run_cli("search", "autentication", "--fuzzy", cwd=tmp_path)
+        assert res_text.returncode == 0
+        assert "fuzzy match" in res_text.stdout
+        assert "authentication" in res_text.stdout
+
+        res_json = run_cli("search", "autentication", "--fuzzy", "--json", cwd=tmp_path)
+        assert res_json.returncode == 0
+        data = json.loads(res_json.stdout)
+        assert len(data) > 0
+        assert data[0]["match_kind"] == "fuzzy"
+        assert data[0]["matched_term"] == "authentication"

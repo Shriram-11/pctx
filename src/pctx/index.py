@@ -56,6 +56,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
     content
 );
 
+CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts_vocab USING fts5vocab(sections_fts, row);
+
 CREATE TRIGGER IF NOT EXISTS sections_fts_ai AFTER INSERT ON sections BEGIN
     INSERT INTO sections_fts(rowid, address, heading, content)
     VALUES (new.id, new.address, coalesce(new.heading, ''), new.content);
@@ -96,6 +98,49 @@ def _extract_summary(sections: list[Section], raw_content: str, doc_path: str) -
         if line and not line.startswith("#") and not line.startswith("---"):
             return line[:200]
     return doc_path
+
+
+def _edit_distance(a: str, b: str) -> int:
+    """Compute Levenshtein edit distance using Wagner-Fischer DP."""
+    if len(a) < len(b):
+        a, b = b, a
+    if not b:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        curr = [i]
+        for j, cb in enumerate(b, 1):
+            cost = 0 if ca == cb else 1
+            curr.append(min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost))
+        prev = curr
+    return prev[-1]
+
+
+def _fuzzy_candidates(conn: sqlite3.Connection, term: str, limit: int = 8) -> list[str]:
+    """Find indexed vocabulary terms within edit distance 1-2 of term."""
+    t = term.lower()
+    if len(t) < 3:
+        return []
+    max_edits = 2 if len(t) >= 6 else 1
+    first = t[0]
+    upper = chr(ord(first) + 1)
+
+    rows = conn.execute(
+        "SELECT term, cnt FROM sections_fts_vocab WHERE term >= ? AND term < ?",
+        (first, upper),
+    ).fetchall()
+
+    scored: list[tuple[int, int, str]] = []
+    for row in rows:
+        cand = row["term"]
+        if abs(len(cand) - len(t)) > max_edits:
+            continue
+        dist = _edit_distance(t, cand)
+        if 0 < dist <= max_edits:
+            scored.append((dist, -row["cnt"], cand))
+
+    scored.sort()
+    return [cand for _, _, cand in scored[:limit]]
 
 
 def _dedup_search_rows(rows: list[sqlite3.Row]) -> list[sqlite3.Row]:
@@ -366,35 +411,18 @@ class Index:
         ).fetchall()
         return [_row_to_section(r) for r in rows]
 
-    def _execute_search(
+    def _run_fts_query(
         self,
-        query: str,
-        limit: int = 20,
-        offset: int = 0,
-        highlight: tuple[str, str] = ("<b>", "</b>"),
-        doc_scope: Optional[str] = None,
-        prefix: bool = False,
-        dedup: bool = True,
-    ) -> tuple[list[dict], int]:
-        """Execute search and return (page_results, total_hits_capped)."""
-        if not query or not query.strip():
-            return [], 0
-
-        conn = self._get_conn()
-
-        # Sanitize query for FTS5: strip dangerous characters or wrap terms in quotes
-        clean_terms = []
-        for term in query.strip().split():
-            clean_term = "".join(c for c in term if c.isalnum() or c in ("-", "_"))
-            if clean_term:
-                clean_terms.append(f'"{clean_term}"*' if prefix else f'"{clean_term}"')
-
-        if not clean_terms:
-            return [], 0
-
-        fts_query = " AND ".join(clean_terms)
+        conn: sqlite3.Connection,
+        fts_query: str,
+        limit: int,
+        offset: int,
+        highlight: tuple[str, str],
+        doc_scope: Optional[str],
+        dedup: bool,
+    ) -> tuple[list[sqlite3.Row], int]:
+        """Run an FTS5 query with optional doc_scope, dedup, and pagination."""
         hl_start, hl_end = highlight
-
         where_clauses = ["sections_fts MATCH ?"]
         params: list[object] = [hl_start, hl_end, fts_query]
         join_sql = "JOIN sections s ON s.id = sections_fts.rowid"
@@ -436,16 +464,90 @@ class Index:
             rows = _dedup_search_rows(rows)
 
         total_hits = min(len(rows), 100)
-        page_rows = rows[offset : offset + limit]
+        return rows[offset : offset + limit], total_hits
 
-        match_kind = "prefix" if prefix else "exact"
+    def _execute_search(
+        self,
+        query: str,
+        limit: int = 20,
+        offset: int = 0,
+        highlight: tuple[str, str] = ("<b>", "</b>"),
+        doc_scope: Optional[str] = None,
+        prefix: bool = False,
+        dedup: bool = True,
+        fuzzy: bool = False,
+    ) -> tuple[list[dict], int]:
+        """Execute search and return (page_results, total_hits_capped)."""
+        if not query or not query.strip():
+            return [], 0
+
+        conn = self._get_conn()
+
+        raw_terms = []
+        for term in query.strip().split():
+            clean_term = "".join(c for c in term if c.isalnum() or c in ("-", "_"))
+            if clean_term:
+                raw_terms.append(clean_term)
+
+        if not raw_terms:
+            return [], 0
+
+        def _fmt_term(t: str) -> str:
+            return f'"{t}"*' if prefix else f'"{t}"'
+
+        fts_query = " AND ".join(_fmt_term(t) for t in raw_terms)
+        page_rows, total_hits = self._run_fts_query(
+            conn, fts_query, limit, offset, highlight, doc_scope, dedup
+        )
+
+        if page_rows or not fuzzy:
+            match_kind = "prefix" if prefix else "exact"
+            results = [
+                {
+                    "address": r["address"],
+                    "heading": r["heading"],
+                    "snippet": r["snippet"],
+                    "score": r["score"],
+                    "match_kind": match_kind,
+                }
+                for r in page_rows
+            ]
+            return results, total_hits
+
+        # Fuzzy fallback: replace terms that have no hits with edit-distance candidates
+        fuzzy_clauses: list[str] = []
+        corrections: list[tuple[str, str]] = []
+        for t in raw_terms:
+            has_hit = conn.execute(
+                "SELECT 1 FROM sections_fts WHERE sections_fts MATCH ? LIMIT 1",
+                (_fmt_term(t),),
+            ).fetchone()
+            if has_hit:
+                fuzzy_clauses.append(_fmt_term(t))
+            else:
+                cands = _fuzzy_candidates(conn, t)
+                if not cands:
+                    return [], 0
+                or_group = " OR ".join(_fmt_term(c) for c in cands)
+                fuzzy_clauses.append(f"({or_group})")
+                corrections.append((t, cands[0]))
+
+        if not corrections:
+            return [], 0
+
+        fuzzy_fts = " AND ".join(fuzzy_clauses)
+        page_rows, total_hits = self._run_fts_query(
+            conn, fuzzy_fts, limit, offset, highlight, doc_scope, dedup
+        )
+        matched_term = ", ".join(c for _, c in corrections)
         results = [
             {
                 "address": r["address"],
                 "heading": r["heading"],
                 "snippet": r["snippet"],
                 "score": r["score"],
-                "match_kind": match_kind,
+                "match_kind": "fuzzy",
+                "matched_term": matched_term,
             }
             for r in page_rows
         ]
@@ -460,6 +562,7 @@ class Index:
         doc_scope: Optional[str] = None,
         prefix: bool = False,
         dedup: bool = True,
+        fuzzy: bool = False,
     ) -> list[dict]:
         """Full-text search over indexed sections using BM25 ranking.
 
@@ -473,6 +576,7 @@ class Index:
             doc_scope=doc_scope,
             prefix=prefix,
             dedup=dedup,
+            fuzzy=fuzzy,
         )
         return results
 
@@ -485,6 +589,7 @@ class Index:
         doc_scope: Optional[str] = None,
         prefix: bool = False,
         dedup: bool = True,
+        fuzzy: bool = False,
     ) -> tuple[list[dict], int]:
         """Full-text search returning (results, total_hits)."""
         return self._execute_search(
@@ -495,6 +600,7 @@ class Index:
             doc_scope=doc_scope,
             prefix=prefix,
             dedup=dedup,
+            fuzzy=fuzzy,
         )
 
 
